@@ -1,4 +1,5 @@
 import socket
+import ssl
 
 
 class URL:
@@ -12,8 +13,13 @@ class URL:
     def __init__(self, url: str):
         # getting the URL scheme
         self.scheme, url = url.split("://", 1)
-        assert self.scheme == "http"
 
+        # checks for http or https scheme then idenifies the suitable port based on it
+        assert self.scheme in ["http", "https"]
+        if self.scheme == "http":
+            self.port = 80
+        elif self.scheme == "https":
+            self.port = 443
         # if there is not url path assigned the concatinate the "/" with the url
         if "/" not in url:
             url = url + "/"
@@ -31,14 +37,25 @@ class URL:
         - protocol, which describes the steps by which the two computers
         will establish a connection.
         """
+
+        # in order to support the https we will use ssl library which handles
+        #  - which encryption algorithms are user-mode
+        #  - how a common encryption key is agreed to
+        #  - how to make sure that the browser is connecting to the correct host.
+
+        # we will creae context obj that will wrap the sockent itself
         s = socket.socket(
             family=socket.AF_INET,  # Address families have names that begin with `AF`
             type=socket.SOCK_STREAM,  # Types have names that begin with `SOCK`.
             proto=socket.IPPROTO_TCP,  # Protocols have names that depend on the address family.
         )
-        s.connect((self.host, 80))
-        # `connect` takes a single argument, and that argument is a pair of a host and a port.
-        # This is because different address families have different numbers of arguments.
+        s.connect((self.host, self.port))
+        if self.scheme == "https":
+            ctx = ssl.create_default_context()
+            s = ctx.wrap_socket(s, server_hostname=self.host)
+        # `connect` takes a single argument
+        # that argument is a pair of a host and a port.
+        # NOTE: different address families have different numbers of arguments.
 
         # request formating
         request = f"GET {self.path} HTTP/1.0\r\n"
