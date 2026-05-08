@@ -3,7 +3,7 @@ import ssl
 import tkinter
 
 # chosed because that was a common old-timey monitor size
-WIDTH, HIEGT = 800, 600
+WIDTH, HEIGHT = 800, 600
 # without these vars all the text chars will be drawn in the same place,evantual overlap!
 HSTEP, VSTEP = 13, 18  # these to control the cursor movements
 
@@ -114,7 +114,7 @@ class Browser:
         self.canvas = tkinter.Canvas(
             self.window,
             width=WIDTH,
-            height=HIEGT,
+            height=HEIGHT,
         )
         self.canvas.pack()  # a Tk peculiarity, positions the canvas inside the window.
         """scrolling
@@ -139,7 +139,7 @@ class Browser:
 
     def scrollDown(self, e):
         # scrolls down
-        max_scroll = max(0, self.max_y - HIEGT)  # calculate the maxmux scrolable hight
+        max_scroll = max(0, self.max_y - HEIGHT)  # calculate the maxmux scrolable hight
         if self.scroll >= max_scroll:
             # check if the scroll value reached the max upper level which is 0
             return
@@ -154,6 +154,10 @@ class Browser:
         self.canvas.delete("all")  # to clear the old text
         # draw each character based on the stored position
         for x, y, c in self.display_list:
+            if y > self.scroll + HEIGHT:  # skips characters below the viewing window
+                continue
+            if y + VSTEP < self.scroll:  # skips characters above the viewing window
+                continue
             self.canvas.create_text(
                 x, y - self.scroll, text=c
             )  # The page coordinate `y` then has screen coordinate `y - self.scroll`
