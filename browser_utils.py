@@ -1,5 +1,9 @@
 import socket
 import ssl
+import tkinter
+
+# chosed because that was a common old-timey monitor size
+WIDTH, HIEGT = 800, 600
 
 
 class URL:
@@ -95,17 +99,48 @@ class URL:
         return content
 
 
-def show(body):
+class Browser:
+    def __init__(self):
+        # Creating the window and the canvas
+        self.window = tkinter.Tk()  # creating the window
+        """
+        - this line creates the `Canvas` inside that window:
+                - self.window as an argument, so that Tk knows where to display the canvas.
+                - The other arguments define the canvas’s size"""
+        self.canvas = tkinter.Canvas(
+            self.window,
+            width=WIDTH,
+            height=HIEGT,
+        )
+        self.canvas.pack()  # a Tk peculiarity, positions the canvas inside the window.
+
+    def load(self, url):
+        # this loads our HTML text content for now...
+        body = url.request()
+        text = lex(body)
+        # without these vars all the text chars will be drawn in the same place,evantual overlap!
+        HSTEP, VSTEP = 13, 18  # these to control the cursor movements
+        cursor_x, cursor_y = HSTEP, VSTEP  # the current cursor placement
+        # this will draw in the canvas
+        for c in text:
+            self.canvas.create_text(
+                cursor_x, cursor_y, text=c
+            )  # will display text based on args passed as coordinate
+            # the movement logic
+            cursor_x += HSTEP
+            if cursor_x >= WIDTH - HSTEP:
+                cursor_y += VSTEP  # i.e Vertical steps
+                cursor_x = HSTEP  # i.e Horizontical steps
+
+
+def lex(body):
     in_tag = False
+    text = ""
     for c in body:
         if c == "<":
             in_tag = True
         elif c == ">":
             in_tag = False
         elif not in_tag:
-            print(c, end="")
-
-
-def load(url):
-    body = url.request()
-    show(body)
+            text += c
+    return text

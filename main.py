@@ -1,10 +1,13 @@
-from browser_utils import URL, load
+import tkinter
+
+from browser_utils import URL, Browser
 
 
 def main():
     import sys
 
-    load(URL(sys.argv[1]))
+    Browser().load(URL(sys.argv[1]))
+    tkinter.mainloop()  # to start the loop in which will update and redraw our UI
 
 
 if __name__ == "__main__":
