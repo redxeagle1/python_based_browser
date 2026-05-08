@@ -4,6 +4,10 @@ import tkinter
 
 # chosed because that was a common old-timey monitor size
 WIDTH, HIEGT = 800, 600
+# without these vars all the text chars will be drawn in the same place,evantual overlap!
+HSTEP, VSTEP = 13, 18  # these to control the cursor movements
+
+SCROLL_STEP = 100
 
 
 class URL:
@@ -113,24 +117,75 @@ class Browser:
             height=HIEGT,
         )
         self.canvas.pack()  # a Tk peculiarity, positions the canvas inside the window.
+        """scrolling
+            a browser lays out the page determines where everything on the page goes based
+            on page coordinates.
+            then rasters[draws everything] the page in terms of screen coordinates.
+        """
+        self.scroll = 0  # scroll buffer in order to change the view in the browser
+        self.window.bind("<Down>", self.scrollDown)
+        self.window.bind("<Up>", self.scrollUp)
 
+    # Scroll cotrol
+    # scrolls up
+    def scrollUp(self, e):
+        # Stops if the page is equal to zero
+        if self.scroll == 0:
+            return
+        # clamp the value of scrolling to be between 0 and [itself - SCROLL_STEP]
+        self.scroll = max(0, self.scroll - SCROLL_STEP)
+        self.draw()
+        # check if the scroll value reached the max upper level which is 0
+
+    def scrollDown(self, e):
+        # scrolls down
+        max_scroll = max(0, self.max_y - HIEGT)  # calculate the maxmux scrolable hight
+        if self.scroll >= max_scroll:
+            # check if the scroll value reached the max upper level which is 0
+            return
+        # clamb the value between the maxmun scrolable hight and current scroll value
+        self.scroll = min(max_scroll, self.scroll + SCROLL_STEP)
+        self.draw()
+
+    # -----------------------------
+
+    # page drawing and content rendering
+    def draw(self):
+        self.canvas.delete("all")  # to clear the old text
+        # draw each character based on the stored position
+        for x, y, c in self.display_list:
+            self.canvas.create_text(
+                x, y - self.scroll, text=c
+            )  # The page coordinate `y` then has screen coordinate `y - self.scroll`
+
+    # ----------------------------------
+
+    # content loader
     def load(self, url):
         # this loads our HTML text content for now...
         body = url.request()
         text = lex(body)
-        # without these vars all the text chars will be drawn in the same place,evantual overlap!
-        HSTEP, VSTEP = 13, 18  # these to control the cursor movements
-        cursor_x, cursor_y = HSTEP, VSTEP  # the current cursor placement
-        # this will draw in the canvas
-        for c in text:
-            self.canvas.create_text(
-                cursor_x, cursor_y, text=c
-            )  # will display text based on args passed as coordinate
-            # the movement logic
-            cursor_x += HSTEP
-            if cursor_x >= WIDTH - HSTEP:
-                cursor_y += VSTEP  # i.e Vertical steps
-                cursor_x = HSTEP  # i.e Horizontical steps
+        self.display_list = layout(text)
+        # [-1] to get the last item then [1] to access the y index of the tuple
+        # this get the last index of Y
+        self.max_y = self.display_list[-1][1] + VSTEP if self.display_list else 0
+        self.draw()
+
+
+def layout(text):
+    display_text = []  # will compute and store the position of each character
+    cursor_x, cursor_y = HSTEP, VSTEP  # the current cursor placement
+    for c in text:
+        display_text.append(
+            (cursor_x, cursor_y, c)
+        )  # will store the text's char coordinates in the list based on the variable
+
+        # the movement logic
+        cursor_x += HSTEP
+        if cursor_x >= WIDTH - HSTEP:
+            cursor_y += VSTEP  # i.e Vertical steps
+            cursor_x = HSTEP  # i.e Horizontical steps
+    return display_text
 
 
 def lex(body):
