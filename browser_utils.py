@@ -1,6 +1,6 @@
 import socket
 import ssl
-import tkinter
+import tkinter as tk
 
 # chosed because that was a common old-timey monitor size
 WIDTH, HEIGHT = 800, 600
@@ -106,22 +106,42 @@ class URL:
 class Browser:
     def __init__(self):
         # Creating the window and the canvas
-        self.window = tkinter.Tk()  # creating the window
-        """
-        - this line creates the `Canvas` inside that window:
+        self.window = tk.Tk()  # creating the window
+        self.window.geometry(f"{WIDTH}x{HEIGHT}")
+        # configuring A url input panel for the browser
+        self.url_input = tk.Entry(self.window)
+
+        # this panel will contain our canvas and scroll bar
+        self.main_panel = tk.Frame(self.window)
+        self.scrollbar = tk.Scrollbar(self.main_panel, orient=tk.VERTICAL)
+        """ what it this object?
+            - this line creates the `Canvas` inside that window:
                 - self.window as an argument, so that Tk knows where to display the canvas.
                 - The other arguments define the canvas’s size"""
-        self.canvas = tkinter.Canvas(
-            self.window,
-            width=WIDTH,
-            height=HEIGHT,
+        self.canvas = tk.Canvas(
+            self.main_panel, bg="white", yscrollcommand=self.scrollbar.set
         )
-        self.canvas.pack()  # a Tk peculiarity, positions the canvas inside the window.
+        """pack is a layout manager that align Items in 4 direction
+            TOP, BOTTHOM, LEFT, RIGHT.
+            pack will allign based only on parent element
+        """
+
+        # will be alinged on self.window
+        self.url_input.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        self.main_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # will be aligned on self.main_frame
+        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
         """scrolling
             a browser lays out the page determines where everything on the page goes based
             on page coordinates.
             then rasters[draws everything] the page in terms of screen coordinates.
         """
+        # The scrollbar visibility will be managed dynamically.
+        self.scrollbar.config(command=self.canvas.yview)
+
         self.scroll = 0  # scroll buffer in order to change the view in the browser
         self.window.bind("<Down>", self.scrollDown)
         self.window.bind("<Up>", self.scrollUp)
@@ -174,6 +194,11 @@ class Browser:
         # this get the last index of Y
         self.max_y = self.display_list[-1][1] + VSTEP if self.display_list else 0
         self.draw()
+
+    # this is a custom function to handle scrolling
+    def update_scrollbar(self):
+        # Get the actual visible height of the window/canvas
+        canvas_hieght = self.canvas.winfo_height
 
 
 def layout(text):
