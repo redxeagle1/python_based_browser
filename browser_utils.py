@@ -25,15 +25,24 @@ class URL:
     """
 
     def __init__(self, url: str):
+        # Support fallback internal schemas in order not to crash out cuz of bad input
+        # or we just want to insert custom HTML pages
+        if url.startswith("data:"):
+            self.scheme = "data"  # its like chrome and firefox
+            self.path = url.split(":", 1)[1]
+            self.host = ""
+            self.port = 0
+            return
+        # Standard network URL parsing if the user wrote (www.google.com) for example
+        if "://" not in url:
+            url = "http://" + url
         # getting the URL scheme
         self.scheme, url = url.split("://", 1)
 
         # checks for http or https scheme then idenifies the suitable port based on it
-        assert self.scheme in ["http", "https"]
-        if self.scheme == "http":
-            self.port = 80
-        elif self.scheme == "https":
-            self.port = 443
+        assert self.scheme in ["http", "https"], f"Unknown Scheme {self.scheme}"
+        # getting the port
+        self.port = 80 if self.scheme == "http" else 443
         # if there is not url path assigned the concatinate the "/" with the url
         if "/" not in url:
             url = url + "/"
@@ -47,66 +56,88 @@ class URL:
         # Getting the path
         self.path = "/" + url
 
-    def request(self):  # Telnet IN PYTHON
+    def request(self, max_redirects=5):  # Telnet IN PYTHON
         """A socket has
         - address family, which tells you how to find the other computer.
         - type, which describes the sort of conversation that’s going to happen
         - protocol, which describes the steps by which the two computers
         will establish a connection.
         """
-
+        """Fetches the URL content with automatic redirect handling and safe socket closing."""
+        if self.scheme == "data":
+            return self.path
+        # redirection threshold pass check
+        if max_redirects <= 0:
+            raise Exception("ERR_TOO_MANY_REDIRECTS: Redirect loop detected.")
         # in order to support the https we will use ssl library which handles
         #  - which encryption algorithms are user-mode
         #  - how a common encryption key is agreed to
         #  - how to make sure that the browser is connecting to the correct host.
 
         # we will creae context obj that will wrap the sockent itself
-        s = socket.socket(
-            family=socket.AF_INET,  # Address families have names that begin with `AF`
-            type=socket.SOCK_STREAM,  # Types have names that begin with `SOCK`.
-            proto=socket.IPPROTO_TCP,  # Protocols have names that depend on the address family.
-        )
-        s.connect((self.host, self.port))
-        if self.scheme == "https":
-            ctx = ssl.create_default_context()
-            s = ctx.wrap_socket(s, server_hostname=self.host)
-        # `connect` takes a single argument
-        # that argument is a pair of a host and a port.
-        # NOTE: different address families have different numbers of arguments.
 
-        # request formating
-        request = f"GET {self.path} HTTP/1.0\r\n"
-        request += f"Host: {self.host}\r\n"
-        request += "\r\n"
+        # we use with keyword to auto close both the file and the socket connection
+        with (
+            socket.socket(
+                family=socket.AF_INET,  # Address families have names that begin with `AF`
+                type=socket.SOCK_STREAM,  # Types have names that begin with `SOCK`.
+                proto=socket.IPPROTO_TCP,  # Protocols have names that depend on the address family.
+            ) as s
+        ):
+            # Configure a reasonable timeout so bad links don't freeze the GUI indefinitely
+            s.settimeout(5.0)
+            s.connect((self.host, self.port))
+            if self.scheme == "https":
+                ctx = ssl.create_default_context()
+                s = ctx.wrap_socket(s, server_hostname=self.host)
+            # `connect` takes a single argument
+            # that argument is a pair of a host and a port.
+            # NOTE: different address families have different numbers of arguments.
 
-        # sending the request
-        s.send(request.encode("utf8"))
-        # getting the respone
-        response = s.makefile("r", encoding="utf8", newline="\r\n")
+            # request formating
+            request = f"GET {self.path} HTTP/1.0\r\n"
+            request += f"Host: {self.host}\r\n"
+            request += "\r\n"
 
-        # split the response into pieces
-        statusline = response.readline()
-        version, status, epxplanation = statusline.split(" ", 2)
+            # sending the request
+            s.send(request.encode("utf8"))
+            # getting the respone and Wrap stream parsing safely
+            # makefile is a shortcut for copying the response and pasted it into a temp file
+            with s.makefile("r", encoding="utf8", newline="\r\n") as response:
+                # split the response into pieces
+                statusline = response.readline()
+                version, status, explanation = statusline.split(" ", 2)
 
-        # split each line at the first colon then
-        # fill in a map of header names to header values.
-        # NOTE:Headers are case-insensitive, so normalize them to lower case
-        response_headers = {}
-        while True:
-            line = response.readline()
-            if line == "\r\n":
-                break
-            header, value = line.split(":", 1)
-            response_headers[header.casefold()] = value.strip()
+                # split each line at the first colon then
+                # fill in a map of header names to header values.
+                # NOTE:Headers are case-insensitive, so normalize them to lower case
+                response_headers = {}
+                while True:
+                    line = response.readline()
+                    if line == "\r\n":
+                        break
+                    header, value = line.split(":", 1)
+                    response_headers[header.casefold()] = value.strip()
+                # Handle redirection logic natively
+                if status.startswith("3"):
+                    new_url = response_headers.get("location")
+                    if not new_url:
+                        raise Exception(
+                            "ERR_INVALID_REDIRECT: Server returned 3xx but no Location header."
+                        )
+                    # Support relative redirects
+                    ifw = (
+                        new_url
+                        if "://" in new_url
+                        else f"{self.scheme}://{self.host}{new_url}"
+                    )
+                    return URL(ifw).request(max_redirects - 1)
 
-        # Headers can describe all sorts of information,
-        # couple of headers are especially important because they tell us that the data
-        assert "transfer-encoding" not in response_headers
-        assert "content-encoding" not in response_headers
-        content = response.read()
-        s.close()
-
-        return content
+                # Headers can describe all sorts of information,
+                # couple of headers are especially important because they tell us that the data
+                assert "transfer-encoding" not in response_headers
+                assert "content-encoding" not in response_headers
+                return response.read()
 
 
 class Browser:
@@ -115,9 +146,11 @@ class Browser:
             0  # Initialize max_y to prevent AttributeError before content loads
         )
         self.scroll = 0
+        self.display_list = []
         # Creating the window and the canvas
         self.window = tk.Tk()  # creating the window
         self.window.geometry(f"{WIDTH}x{HEIGHT}")
+        self.window.title("Custom Python Browser Engine")
         # configuring A url input panel for the browser
         self.url_input = tk.Entry(self.window)
 
@@ -249,10 +282,31 @@ class Browser:
     # ---------------------
     # content loader
     # ---------------------
-    def load(self, url=URL("https://browser.engineering/preface.html")):
+    def load(self, url=None):
         # this loads our HTML text content for now...
-        body = url.request()
-        text = lex(body)
+        if url is None:
+            default_html = "<title>Welcome</title><h1>Engine Initialized</h1>Welcome to your custom Python browser. Please enter a destination URL above to begin navigation."
+            url = URL(f"data:{default_html}")
+            self.url_input.delete(0, tk.END)
+            self.url_input.insert(0, "about:blank")
+
+        # Ensure UI entry reflects actual active target
+        if hasattr(url, "scheme") and url.scheme != "data":
+            self.url_input.delete(0, tk.END)
+            # Reconstruct clean visual address string safely
+            clean_addr = f"{url.scheme}://{url.host}{url.path}"
+            self.url_input.insert(0, clean_addr)
+
+        self.scroll = 0  # Force reset top view on newly accessed pages
+
+        # to check if the URL is correct or faulty if correct then it will continue
+        try:
+            body = url.request()
+            text = lex(body)
+        # if not then the browser will diplay a fallbaack page
+        except Exception as err:
+            error_html = f"<title>Navigation Error</title><h1>Failed to Connect</h1>An error occurred while attempting to reach the destination host.<br><br><b>Details:</b> {str(err)}"
+            text = lex(error_html)
         self.display_list = layout(text)
         # [-1] to get the last item then [1] to access the y index of the tuple
         # this get the last index of Y
@@ -278,12 +332,12 @@ def layout(text):
 
 def lex(body):
     in_tag = False
-    text = ""
+    text_buffer = []
     for c in body:
         if c == "<":
             in_tag = True
         elif c == ">":
             in_tag = False
         elif not in_tag:
-            text += c
-    return text
+            text_buffer.append(c)
+    return "".join(text_buffer)
