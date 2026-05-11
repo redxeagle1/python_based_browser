@@ -143,28 +143,44 @@ class Browser:
         self.scrollbar.config(command=self.canvas.yview)
 
         self.scroll = 0  # scroll buffer in order to change the view in the browser
-        self.window.bind("<Down>", self.scrollDown)
-        self.window.bind("<Up>", self.scrollUp)
+        """If we just use self.scrollUp(True) It will give AttributeError so had to
+            write a callable function reference that
+            accepts Tkinter's event object and routes it correctly.
+            You can achieve this perfectly using a lambda function."""
+        self.window.bind("<Down>", lambda e: self.scrollDown(e, iskeyboad=True))
+        self.window.bind("<Up>", lambda e: self.scrollUp(e, iskeyboad=True))
+        self.window.bind("<Configure>", lambda e: self.update_scrollbar())
+        self.window.bind("<MouseWheel>", lambda e: self.scrollUp(e, iskeyboad=False))
+        self.window.bind("<Button-4>", lambda e: self.scrollUp(e, iskeyboad=False))
+        self.window.bind("<MouseWheel>", lambda e: self.scrollDown(e, iskeyboad=False))
+        self.window.bind("<Button-5>", lambda e: self.scrollDown(e, iskeyboad=False))
 
     # Scroll cotrol
     # scrolls up
-    def scrollUp(self, e):
+    def scrollUp(self, e, iskeyboad=False):
         # Stops if the page is equal to zero
         if self.scroll == 0:
             return
         # clamp the value of scrolling to be between 0 and [itself - SCROLL_STEP]
-        self.scroll = max(0, self.scroll - SCROLL_STEP)
+        self.scroll = (
+            max(0, self.scroll - SCROLL_STEP) if iskeyboad else max(0, self.scroll - 40)
+        )
+
         self.draw()
         # check if the scroll value reached the max upper level which is 0
 
-    def scrollDown(self, e):
+    def scrollDown(self, e, iskeyboad=False):
         # scrolls down
         max_scroll = max(0, self.max_y - HEIGHT)  # calculate the maxmux scrolable hight
         if self.scroll >= max_scroll:
             # check if the scroll value reached the max upper level which is 0
             return
         # clamb the value between the maxmun scrolable hight and current scroll value
-        self.scroll = min(max_scroll, self.scroll + SCROLL_STEP)
+        self.scroll = (
+            min(max_scroll, self.scroll + SCROLL_STEP)
+            if iskeyboad
+            else min(max_scroll, self.scroll + 40)
+        )
         self.draw()
 
     # -----------------------------
@@ -173,6 +189,7 @@ class Browser:
     def draw(self):
         self.canvas.delete("all")  # to clear the old text
         # draw each character based on the stored position
+        self.update_scrollbar()
         for x, y, c in self.display_list:
             if y > self.scroll + HEIGHT:  # skips characters below the viewing window
                 continue
@@ -192,13 +209,25 @@ class Browser:
         self.display_list = layout(text)
         # [-1] to get the last item then [1] to access the y index of the tuple
         # this get the last index of Y
-        self.max_y = self.display_list[-1][1] + VSTEP if self.display_list else 0
+        self.max_y = int(self.display_list[-1][1] + VSTEP) if self.display_list else 0
         self.draw()
 
     # this is a custom function to handle scrolling
     def update_scrollbar(self):
         # Get the actual visible height of the window/canvas
-        canvas_hieght = self.canvas.winfo_height
+        canvas_height = self.canvas.winfo_height()
+        if self.max_y > canvas_height:
+            # Show scrollbar before the canvas to maintain layout order
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y, before=self.canvas)
+
+            # 2. Synchronize the visual slider thumb with your manual self.scroll
+            # Tkinter scrollbars require fractions between 0.0 and 1.0
+            first_fraction = self.scroll / self.max_y
+            last_fraction = (self.scroll + canvas_height) / self.max_y
+            self.scrollbar.set(first_fraction, last_fraction)
+        else:
+            # Content fits perfectly, hide the scrollbar
+            self.scrollbar.pack_forget()
 
 
 def layout(text):
