@@ -3,11 +3,17 @@ import ssl
 import tkinter as tk
 
 # chosed because that was a common old-timey monitor size
-WIDTH, HEIGHT = 800, 600
+WIDTH, HEIGHT = 900, 600
 # without these vars all the text chars will be drawn in the same place,evantual overlap!
 HSTEP, VSTEP = 13, 18  # these to control the cursor movements
-
+# VSTEP IS Line Height
+# HSTEP IS Char Width
 SCROLL_STEP = 100
+
+# To solve the scrollbar overlap issue we ne to add margins to the text as the following
+SCROLLBAR_RESERVED = 20  # the width itself is 20 adding a padding will increase it
+
+CONTENT_WIDTH = WIDTH - SCROLLBAR_RESERVED  # the actual possible width
 
 
 class URL:
@@ -105,6 +111,10 @@ class URL:
 
 class Browser:
     def __init__(self):
+        self.max_y = (
+            0  # Initialize max_y to prevent AttributeError before content loads
+        )
+        self.scroll = 0
         # Creating the window and the canvas
         self.window = tk.Tk()  # creating the window
         self.window.geometry(f"{WIDTH}x{HEIGHT}")
@@ -113,14 +123,7 @@ class Browser:
 
         # this panel will contain our canvas and scroll bar
         self.main_panel = tk.Frame(self.window)
-        self.scrollbar = tk.Scrollbar(self.main_panel, orient=tk.VERTICAL)
-        """ what it this object?
-            - this line creates the `Canvas` inside that window:
-                - self.window as an argument, so that Tk knows where to display the canvas.
-                - The other arguments define the canvas’s size"""
-        self.canvas = tk.Canvas(
-            self.main_panel, bg="white", yscrollcommand=self.scrollbar.set
-        )
+
         """pack is a layout manager that align Items in 4 direction
             TOP, BOTTHOM, LEFT, RIGHT.
             pack will allign based only on parent element
@@ -130,10 +133,26 @@ class Browser:
         self.url_input.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         self.main_panel.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # will be aligned on self.main_frame
-        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Had to change the Layput manager for this Frame for more robustness
+        self.main_panel.columnconfigure(0, weight=1)
+        self.main_panel.rowconfigure(0, weight=1)
 
+        self.scrollbar = tk.Scrollbar(self.main_panel, orient=tk.VERTICAL)
+        """ what it this object?
+            - this line creates the `Canvas` inside that window:
+                - self.window as an argument, so that Tk knows where to display the canvas.
+                - The other arguments define the canvas’s size"""
+        self.canvas = tk.Canvas(
+            self.main_panel, bg="white", yscrollcommand=self.scrollbar.set
+        )
+        # Grid the Canvas into the expanding cell
+        self.canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        # Grid the Scrollbar into the rightmost cell
+        self.scrollbar.grid(
+            row=0,
+            column=1,
+            sticky=tk.NS,
+        )
         """scrolling
             a browser lays out the page determines where everything on the page goes based
             on page coordinates.
@@ -142,50 +161,78 @@ class Browser:
         # The scrollbar visibility will be managed dynamically.
         self.scrollbar.config(command=self.canvas.yview)
 
-        self.scroll = 0  # scroll buffer in order to change the view in the browser
         """If we just use self.scrollUp(True) It will give AttributeError so had to
             write a callable function reference that
             accepts Tkinter's event object and routes it correctly.
             You can achieve this perfectly using a lambda function."""
-        self.window.bind("<Down>", lambda e: self.scrollDown(e, iskeyboad=True))
-        self.window.bind("<Up>", lambda e: self.scrollUp(e, iskeyboad=True))
-        self.window.bind("<Configure>", lambda e: self.update_scrollbar())
-        self.window.bind("<MouseWheel>", lambda e: self.scrollUp(e, iskeyboad=False))
-        self.window.bind("<Button-4>", lambda e: self.scrollUp(e, iskeyboad=False))
-        self.window.bind("<MouseWheel>", lambda e: self.scrollDown(e, iskeyboad=False))
-        self.window.bind("<Button-5>", lambda e: self.scrollDown(e, iskeyboad=False))
 
+        # for entering URLs
+        self.window.bind("<Return>", self.handleUrl)
+        # Keyboard Bindings (-1 for Up, 1 for Down)
+        self.window.bind("<Up>", lambda e: self.handleScroll(e, -1, isKeyboard=True))
+        self.window.bind("<Down>", lambda e: self.handleScroll(e, 1, isKeyboard=True))
+
+        # Windows / macOS Mouse Scroll
+        self.window.bind("<MouseWheel>", self._on_mousewhell)
+
+        # Linux Mouse Scroll
+        self.window.bind(
+            "<Button-4>", lambda e: self.handleScroll(e, -1, isKeyboard=False)
+        )
+        self.window.bind(
+            "<Button-5>", lambda e: self.handleScroll(e, 1, isKeyboard=False)
+        )
+
+    # ---------------------------
+    # URL receiving
+    # -------------------------
+    def handleUrl(self, e):
+        url_raw = self.url_input.get()
+        self.recieved_url = URL(url_raw)
+        self.load(self.recieved_url)
+
+    # ---------------------------
     # Scroll cotrol
-    # scrolls up
-    def scrollUp(self, e, iskeyboad=False):
-        # Stops if the page is equal to zero
-        if self.scroll == 0:
-            return
-        # clamp the value of scrolling to be between 0 and [itself - SCROLL_STEP]
-        self.scroll = (
-            max(0, self.scroll - SCROLL_STEP) if iskeyboad else max(0, self.scroll - 40)
-        )
-
-        self.draw()
-        # check if the scroll value reached the max upper level which is 0
-
-    def scrollDown(self, e, iskeyboad=False):
-        # scrolls down
+    # ---------------------------
+    def handleScroll(self, e, direction, isKeyboard=False):
         max_scroll = max(0, self.max_y - HEIGHT)  # calculate the maxmux scrolable hight
-        if self.scroll >= max_scroll:
-            # check if the scroll value reached the max upper level which is 0
-            return
-        # clamb the value between the maxmun scrolable hight and current scroll value
-        self.scroll = (
-            min(max_scroll, self.scroll + SCROLL_STEP)
-            if iskeyboad
-            else min(max_scroll, self.scroll + 40)
-        )
+        """since now it handle both directions at the same time it clamps
+        the scroll value at two level
+            - the upper level (max) which calculate the maxmum you can scroll to up
+            - the bottom level (min) which calculate the minimum you can scroll to down
+        the direction is responsible for idenifying weather we want to go up or down
+        """
+        self.scroll = max(0, min(max_scroll, self.scroll + (SCROLL_STEP * direction)))
+        # call thw draw function
         self.draw()
 
-    # -----------------------------
+    def _on_mousewhell(self, e):
+        """desc:
+        mousewhell is a sequence supported in mac and windows it depend on a delta value
+        to tell where is the direction the aim of this function is to calculate the current
+        scroll direction then call back the handleScroll function"""
+        direction = -1 if e.delta > 0 else 1
+        self.handleScroll(e, direction=direction, isKeyboard=False)
 
+    # this is a custom function to handle scrolling
+    def update_scrollbar(self):
+        # Get the actual visible height of the window/canvas
+        canvas_height = self.canvas.winfo_height()
+        if self.max_y > canvas_height and canvas_height > 0:
+            # Show scrollbar before the canvas to maintain layout order
+            self.scrollbar.grid(row=0, column=1, sticky=tk.NS, padx=(10, 0))
+            # 2. Synchronize the visual slider thumb with your manual self.scroll
+            # Tkinter scrollbars require fractions between 0.0 and 1.0
+            first_fraction = self.scroll / self.max_y
+            last_fraction = (self.scroll + canvas_height) / self.max_y
+            self.scrollbar.set(first_fraction, last_fraction)
+        else:
+            # Content fits perfectly, hide the scrollbar
+            self.scrollbar.grid_remove()
+
+    # ----------------------------------
     # page drawing and content rendering
+    # ------------------------------------
     def draw(self):
         self.canvas.delete("all")  # to clear the old text
         # draw each character based on the stored position
@@ -199,10 +246,10 @@ class Browser:
                 x, y - self.scroll, text=c
             )  # The page coordinate `y` then has screen coordinate `y - self.scroll`
 
-    # ----------------------------------
-
+    # ---------------------
     # content loader
-    def load(self, url):
+    # ---------------------
+    def load(self, url=URL("https://browser.engineering/preface.html")):
         # this loads our HTML text content for now...
         body = url.request()
         text = lex(body)
@@ -211,23 +258,6 @@ class Browser:
         # this get the last index of Y
         self.max_y = int(self.display_list[-1][1] + VSTEP) if self.display_list else 0
         self.draw()
-
-    # this is a custom function to handle scrolling
-    def update_scrollbar(self):
-        # Get the actual visible height of the window/canvas
-        canvas_height = self.canvas.winfo_height()
-        if self.max_y > canvas_height:
-            # Show scrollbar before the canvas to maintain layout order
-            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y, before=self.canvas)
-
-            # 2. Synchronize the visual slider thumb with your manual self.scroll
-            # Tkinter scrollbars require fractions between 0.0 and 1.0
-            first_fraction = self.scroll / self.max_y
-            last_fraction = (self.scroll + canvas_height) / self.max_y
-            self.scrollbar.set(first_fraction, last_fraction)
-        else:
-            # Content fits perfectly, hide the scrollbar
-            self.scrollbar.pack_forget()
 
 
 def layout(text):
@@ -240,7 +270,7 @@ def layout(text):
 
         # the movement logic
         cursor_x += HSTEP
-        if cursor_x >= WIDTH - HSTEP:
+        if cursor_x >= CONTENT_WIDTH - HSTEP:
             cursor_y += VSTEP  # i.e Vertical steps
             cursor_x = HSTEP  # i.e Horizontical steps
     return display_text
