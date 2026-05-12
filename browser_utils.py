@@ -175,9 +175,7 @@ class Browser:
             - this line creates the `Canvas` inside that window:
                 - self.window as an argument, so that Tk knows where to display the canvas.
                 - The other arguments define the canvas’s size"""
-        self.canvas = tk.Canvas(
-            self.main_panel, bg="white", yscrollcommand=self.scrollbar.set
-        )
+        self.canvas = tk.Canvas(self.main_panel)
         # Grid the Canvas into the expanding cell
         self.canvas.grid(row=0, column=0, sticky=tk.NSEW)
         # Grid the Scrollbar into the rightmost cell
@@ -191,13 +189,24 @@ class Browser:
             on page coordinates.
             then rasters[draws everything] the page in terms of screen coordinates.
         """
-        # The scrollbar visibility will be managed dynamically.
-        self.scrollbar.config(command=self.canvas.yview)
-
-        """If we just use self.scrollUp(True) It will give AttributeError so had to
+        self.scrollbar.config(command=self.handleScrollbar)
+        """ BUG Report
+            Since we use a custom scrolling logic we are scrolling twice
+                - the first by the automatic config by command=self.canvas.yview
+                - the second is our manual function
+            so I had to choose the manual one
+            Also Dragging the native scrollbar updates the Canvas viewport
+            but does not
+            - update my self.scroll variable or
+            - trigger my self.draw() function.
+        """
+        # -----
+        """ WHY did I choose to write a lambda function in the binding section
+            If we just use self.scrollUp(True) It will give AttributeError so had to
             write a callable function reference that
             accepts Tkinter's event object and routes it correctly.
-            You can achieve this perfectly using a lambda function."""
+            You can achieve this perfectly using a lambda function.
+        """
 
         # for entering URLs
         self.window.bind("<Return>", self.handleUrl)
@@ -247,10 +256,68 @@ class Browser:
         direction = -1 if e.delta > 0 else 1
         self.handleScroll(e, direction=direction, isKeyboard=False)
 
+    # Tkinter passes specific instruction arguments to the callback when a user interacts with a scrollba
+    # (moveto for dragging the thumb, scroll for clicking arrows/troughs).
+    def handleScrollbar(self, *args):
+        """MORE ABOUT THE PASSED ARGUMENTs:
+        When a user interacts with a Tkinter Scrollbar, it automatically
+            - fires its assigned command callback
+            - passes a tuple of strings (*args)
+        Absolute Positioning (moveto) and Relative Movement (scroll).
+        1. "moveto"
+            - args[0]: "moveto"
+            - args[1]: A string representing a float between "0.0" and "1.0".
+            - Example args received: ('moveto', '0.245')
+        2. "scroll" This event fires when the user clicks the arrow buttons
+        at the ends of the scrollbar, or clicks the empty trough area
+        above or below the thumb.
+            - args[0]: "scroll"
+            - args[1]: The direction and quantity (usually "-1" for up/left, or "1" for down/right).
+            - args[2]: The unit of measurement, which tells you the scale of the jump:
+                "units": Fires when clicking the arrow buttons
+                "pages": Fires when clicking the empty trough track
+            - Example args received: * Clicking the down arrow: ('scroll', '1', 'units')
+        that it
+        """
+        # safety exit if the scrollbar is not active
+        if not args:
+            return
+        max_scroll = max(
+            # added 20 px margin for correctly displaying the content
+            0,
+            self.max_y - (HEIGHT - 20),
+        )  # calculate the maxmux scrolable hight
+        """since now it handle both directions at the same time it clamps
+            the scroll value at two level
+                - the upper level (max) which calculate the maxmum you can scroll to up
+                - the bottom level (min) which calculate the minimum you can scroll to down
+            the direction is responsible for idenifying weather we want to go up or down
+        """
+        action = args[0]
+        # drag handling
+        if action == "moveto":
+            # Dragging the slider thumb natively passes a fraction from 0.0 to 1.0
+            fraction = float(args[1])
+            self.scroll = int(fraction * self.max_y)
+        elif action == "scroll":
+            # Clicking the scrollbar arrows or empty trough area
+            direction = int(args[1])
+            unit = args[2]  # 'units' (arrows) or 'pages' (trough)
+            if unit == "units":
+                self.scroll += direction * SCROLL_STEP
+            elif unit == "pages":
+                self.scroll += direction * HEIGHT
+        self.scroll = max(0, min(max_scroll, self.scroll))
+        self.draw()
+
     # this is a custom function to handle scrolling
     def update_scrollbar(self):
         # Get the actual visible height of the window/canvas
         canvas_height = self.canvas.winfo_height()
+        # fallback safely to constant HEIGHT if window isn't fully mapped yet
+        if canvas_height <= 1:
+            canvas_height = HEIGHT
+
         if self.max_y > canvas_height and canvas_height > 0:
             # Show scrollbar before the canvas to maintain layout order
             self.scrollbar.grid(row=0, column=1, sticky=tk.NS, padx=(10, 0))
