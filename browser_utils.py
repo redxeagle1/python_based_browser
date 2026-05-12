@@ -140,12 +140,151 @@ class URL:
                 return response.read()
 
 
-class Browser:
-    def __init__(self):
+class ScrollController:
+    """
+    Manages the viewport offset, max boundaries,
+    and native Tkinter Scrollbar synchronization for the custom browser engine.
+    """
+
+    # -------
+    """scrolling
+        a browser lays out the page determines where everything on the page goes based
+        on page coordinates.
+        then rasters[draws everything] the page in terms of screen coordinates.
+    """
+
+    def __init__(self, main_panel, canvas, render_callback, view_height, scroll_step):
+        self.canvas = canvas
+        self.render_callback = render_callback  # Reference to Browser.draw()
+        self.HEIGHT = view_height
+        self.SCROLL_STEP = scroll_step
+
+        # Scroll State
+        self.offset = 0  # Replaces Browser.self.scroll
+        # Replaces Browser.self.max_y
         self.max_y = (
             0  # Initialize max_y to prevent AttributeError before content loads
         )
-        self.scroll = 0
+
+        # Initialize Native Scrollbar Widget
+        self.widget = tk.Scrollbar(main_panel, orient=tk.VERTICAL)
+        """ BUG Report
+            Since we use a custom scrolling logic we are scrolling twice
+                - the first by the automatic config by command=self.canvas.yview
+                - the second is our manual function
+            so I had to choose the manual one
+            Also Dragging the native scrollbar updates the Canvas viewport
+            but does not
+            - update my self.scroll variable or
+            - trigger my self.draw() function.
+        """
+        self.widget.config(command=self._on_scrollbar_action)
+
+    def reset(self, new_max_y):
+        """Resets the scroll state for newly loaded pages."""
+        self.offset = 0
+        self.max_y = new_max_y
+
+    def grid(self, row, column, sticky, **kwargs):
+        """Exposes native layout placement for the underlying widget."""
+        self.widget.grid(row=row, column=column, sticky=sticky, **kwargs)
+
+    def sync_ui(self):
+        """Updates the visual slider thumb based on current internal offset."""
+        # Get the actual visible height of the window/canvas
+        canvas_height = self.canvas.winfo_height()
+        # fallback safely to constant HEIGHT if window isn't fully mapped yet
+        if canvas_height <= 1:
+            canvas_height = self.HEIGHT
+
+        if self.max_y > canvas_height and canvas_height > 0:
+            # Show scrollbar before the canvas to maintain layout order
+            self.widget.grid()
+            # Synchronize the visual slider thumb with your manual self.scroll
+            # Tkinter scrollbars require fractions between 0.0 and 1.0
+            first_fraction = self.offset / self.max_y
+            last_fraction = (self.offset + canvas_height) / self.max_y
+            self.widget.set(first_fraction, last_fraction)
+        else:
+            # Content fits perfectly, hide the scrollbar
+            self.widget.grid_remove()
+
+    # ---------------------------
+    # Internal Event Routing
+    # ---------------------------
+    def scroll_by(self, direction, step_type="units"):
+        """desc:
+        mousewhell is a sequence supported in mac and windows it depend on a delta value
+        to tell where is the direction the aim of this function is to calculate the current
+        scroll direction then call back the handleScroll function"""
+        # ----------
+        """Programmatic relative scrolling triggered by keys or mouse wheels."""
+        max_scroll = max(
+            # substracted 40 px margin for correctly displaying the content
+            0,
+            self.max_y - (self.HEIGHT - 40),
+        )  # calculate the maxmux scrolable hight
+        amount = self.SCROLL_STEP if step_type == "units" else self.HEIGHT
+        self.offset += direction * amount
+        """since now it handle both directions at the same time it clamps
+                the scroll value at two level
+                    - the upper level (max) which calculate the maxmum you can scroll to up
+                    - the bottom level (min) which calculate the minimum you can scroll to down
+                the direction is responsible for idenifying weather we want to go up or down
+        """
+        self.offset = max(0, min(max_scroll, self.offset))
+        # call thw draw function
+        self.render_callback()
+
+    # --------------
+    """MORE ABOUT THE PASSED ARGUMENTs:
+        When a user interacts with a Tkinter Scrollbar, it automatically
+            - fires its assigned command callback
+            - passes a tuple of strings (*args)
+        Absolute Positioning (moveto) and Relative Movement (scroll).
+        1. "moveto"
+            - args[0]: "moveto"
+            - args[1]: A string representing a float between "0.0" and "1.0".
+            - Example args received: ('moveto', '0.245')
+        2. "scroll" This event fires when the user clicks the arrow buttons
+        at the ends of the scrollbar, or clicks the empty trough area
+        above or below the thumb.
+            - args[0]: "scroll"
+            - args[1]: The direction and quantity (usually "-1" for up/left, or "1" for down/right).
+            - args[2]: The unit of measurement, which tells you the scale of the jump:
+                "units": Fires when clicking the arrow buttons
+                "pages": Fires when clicking the empty trough track
+            - Example args received: * Clicking the down arrow: ('scroll', '1', 'units')
+        that it
+    """
+
+    def _on_scrollbar_action(self, *args):
+        if not args:
+            return
+        # substracted 40 px margin for correctly displaying the content
+        max_scroll = max(0, self.max_y - (self.HEIGHT - 40))
+        action = args[0]
+        # drag handling
+        if action == "moveto":
+            # Dragging the slider thumb natively passes a fraction from 0.0 to 1.0
+            fraction = float(args[1])
+            self.offset = int(fraction * self.max_y)
+        elif action == "scroll":
+            # Clicking the scrollbar arrows or empty trough area
+            direction = int(args[1])  # 'units' (arrows) or 'pages' (trough)
+            unit = args[2]
+            if unit == "units":
+                self.offset += direction * self.SCROLL_STEP
+            elif unit == "pages":
+                self.offset += direction * self.HEIGHT
+
+        self.offset = max(0, min(max_scroll, self.offset))
+        self.render_callback()
+
+
+class Browser:
+    def __init__(self):
+
         self.display_list = []
         # Creating the window and the canvas
         self.window = tk.Tk()  # creating the window
@@ -170,7 +309,6 @@ class Browser:
         self.main_panel.columnconfigure(0, weight=1)
         self.main_panel.rowconfigure(0, weight=1)
 
-        self.scrollbar = tk.Scrollbar(self.main_panel, orient=tk.VERTICAL)
         """ what it this object?
             - this line creates the `Canvas` inside that window:
                 - self.window as an argument, so that Tk knows where to display the canvas.
@@ -179,51 +317,42 @@ class Browser:
         # Grid the Canvas into the expanding cell
         self.canvas.grid(row=0, column=0, sticky=tk.NSEW)
         # Grid the Scrollbar into the rightmost cell
-        self.scrollbar.grid(
-            row=0,
-            column=1,
-            sticky=tk.NS,
-        )
-        """scrolling
-            a browser lays out the page determines where everything on the page goes based
-            on page coordinates.
-            then rasters[draws everything] the page in terms of screen coordinates.
-        """
-        self.scrollbar.config(command=self.handleScrollbar)
-        """ BUG Report
-            Since we use a custom scrolling logic we are scrolling twice
-                - the first by the automatic config by command=self.canvas.yview
-                - the second is our manual function
-            so I had to choose the manual one
-            Also Dragging the native scrollbar updates the Canvas viewport
-            but does not
-            - update my self.scroll variable or
-            - trigger my self.draw() function.
-        """
-        # -----
-        """ WHY did I choose to write a lambda function in the binding section
-            If we just use self.scrollUp(True) It will give AttributeError so had to
-            write a callable function reference that
-            accepts Tkinter's event object and routes it correctly.
-            You can achieve this perfectly using a lambda function.
-        """
 
+        # ----------------------------------------------------
+        # Initialize Dedicated Controller
+        # ----------------------------------------------------
+        self.scroller = ScrollController(
+            main_panel=self.main_panel,
+            canvas=self.canvas,
+            render_callback=self.draw,
+            view_height=HEIGHT,
+            scroll_step=SCROLL_STEP,
+        )
+        self.scroller.grid(row=0, column=1, sticky=tk.NS, padx=(10, 0))
+
+        # Setup Event Bindings delegating cleanly to the controller
+        self._setup_bindings()
+
+    """WHY did I choose to write a lambda function in the binding section
+        If we just use self.scrollUp(True) It will give AttributeError so had to
+        write a callable function reference that
+        accepts Tkinter's event object and routes it correctly.
+        You can achieve this perfectly using a lambda function.
+    """
+
+    def _setup_bindings(self):
         # for entering URLs
         self.window.bind("<Return>", self.handleUrl)
         # Keyboard Bindings (-1 for Up, 1 for Down)
-        self.window.bind("<Up>", lambda e: self.handleScroll(e, -1, isKeyboard=True))
-        self.window.bind("<Down>", lambda e: self.handleScroll(e, 1, isKeyboard=True))
-
+        self.window.bind("<Up>", lambda e: self.scroller.scroll_by(-1))
+        self.window.bind("<Down>", lambda e: self.scroller.scroll_by(1))
         # Windows / macOS Mouse Scroll
-        self.window.bind("<MouseWheel>", self._on_mousewhell)
-
+        self.window.bind(
+            "<MouseWheel>", lambda e: self.scroller.scroll_by(-1 if e.delta > 0 else 1)
+        )
         # Linux Mouse Scroll
-        self.window.bind(
-            "<Button-4>", lambda e: self.handleScroll(e, -1, isKeyboard=False)
-        )
-        self.window.bind(
-            "<Button-5>", lambda e: self.handleScroll(e, 1, isKeyboard=False)
-        )
+        self.window.bind("<Button-4>", lambda e: self.scroller.scroll_by(-1))
+        self.window.bind("<Button-5>", lambda e: self.scroller.scroll_by(1))
 
     # ---------------------------
     # URL receiving
@@ -233,117 +362,22 @@ class Browser:
         self.recieved_url = URL(url_raw)
         self.load(self.recieved_url)
 
-    # ---------------------------
-    # Scroll cotrol
-    # ---------------------------
-    def handleScroll(self, e, direction, isKeyboard=False):
-        max_scroll = max(0, self.max_y - HEIGHT)  # calculate the maxmux scrolable hight
-        """since now it handle both directions at the same time it clamps
-        the scroll value at two level
-            - the upper level (max) which calculate the maxmum you can scroll to up
-            - the bottom level (min) which calculate the minimum you can scroll to down
-        the direction is responsible for idenifying weather we want to go up or down
-        """
-        self.scroll = max(0, min(max_scroll, self.scroll + (SCROLL_STEP * direction)))
-        # call thw draw function
-        self.draw()
-
-    def _on_mousewhell(self, e):
-        """desc:
-        mousewhell is a sequence supported in mac and windows it depend on a delta value
-        to tell where is the direction the aim of this function is to calculate the current
-        scroll direction then call back the handleScroll function"""
-        direction = -1 if e.delta > 0 else 1
-        self.handleScroll(e, direction=direction, isKeyboard=False)
-
-    # Tkinter passes specific instruction arguments to the callback when a user interacts with a scrollba
-    # (moveto for dragging the thumb, scroll for clicking arrows/troughs).
-    def handleScrollbar(self, *args):
-        """MORE ABOUT THE PASSED ARGUMENTs:
-        When a user interacts with a Tkinter Scrollbar, it automatically
-            - fires its assigned command callback
-            - passes a tuple of strings (*args)
-        Absolute Positioning (moveto) and Relative Movement (scroll).
-        1. "moveto"
-            - args[0]: "moveto"
-            - args[1]: A string representing a float between "0.0" and "1.0".
-            - Example args received: ('moveto', '0.245')
-        2. "scroll" This event fires when the user clicks the arrow buttons
-        at the ends of the scrollbar, or clicks the empty trough area
-        above or below the thumb.
-            - args[0]: "scroll"
-            - args[1]: The direction and quantity (usually "-1" for up/left, or "1" for down/right).
-            - args[2]: The unit of measurement, which tells you the scale of the jump:
-                "units": Fires when clicking the arrow buttons
-                "pages": Fires when clicking the empty trough track
-            - Example args received: * Clicking the down arrow: ('scroll', '1', 'units')
-        that it
-        """
-        # safety exit if the scrollbar is not active
-        if not args:
-            return
-        max_scroll = max(
-            # added 20 px margin for correctly displaying the content
-            0,
-            self.max_y - (HEIGHT - 20),
-        )  # calculate the maxmux scrolable hight
-        """since now it handle both directions at the same time it clamps
-            the scroll value at two level
-                - the upper level (max) which calculate the maxmum you can scroll to up
-                - the bottom level (min) which calculate the minimum you can scroll to down
-            the direction is responsible for idenifying weather we want to go up or down
-        """
-        action = args[0]
-        # drag handling
-        if action == "moveto":
-            # Dragging the slider thumb natively passes a fraction from 0.0 to 1.0
-            fraction = float(args[1])
-            self.scroll = int(fraction * self.max_y)
-        elif action == "scroll":
-            # Clicking the scrollbar arrows or empty trough area
-            direction = int(args[1])
-            unit = args[2]  # 'units' (arrows) or 'pages' (trough)
-            if unit == "units":
-                self.scroll += direction * SCROLL_STEP
-            elif unit == "pages":
-                self.scroll += direction * HEIGHT
-        self.scroll = max(0, min(max_scroll, self.scroll))
-        self.draw()
-
-    # this is a custom function to handle scrolling
-    def update_scrollbar(self):
-        # Get the actual visible height of the window/canvas
-        canvas_height = self.canvas.winfo_height()
-        # fallback safely to constant HEIGHT if window isn't fully mapped yet
-        if canvas_height <= 1:
-            canvas_height = HEIGHT
-
-        if self.max_y > canvas_height and canvas_height > 0:
-            # Show scrollbar before the canvas to maintain layout order
-            self.scrollbar.grid(row=0, column=1, sticky=tk.NS, padx=(10, 0))
-            # 2. Synchronize the visual slider thumb with your manual self.scroll
-            # Tkinter scrollbars require fractions between 0.0 and 1.0
-            first_fraction = self.scroll / self.max_y
-            last_fraction = (self.scroll + canvas_height) / self.max_y
-            self.scrollbar.set(first_fraction, last_fraction)
-        else:
-            # Content fits perfectly, hide the scrollbar
-            self.scrollbar.grid_remove()
-
     # ----------------------------------
     # page drawing and content rendering
     # ------------------------------------
     def draw(self):
         self.canvas.delete("all")  # to clear the old text
         # draw each character based on the stored position
-        self.update_scrollbar()
+        self.scroller.sync_ui()  # Tells the scrollbar to sync size
+        # Direct reference to controller's state tracking
+        current_scroll = self.scroller.offset
         for x, y, c in self.display_list:
-            if y > self.scroll + HEIGHT:  # skips characters below the viewing window
+            if y > current_scroll + HEIGHT:  # skips characters below the viewing window
                 continue
-            if y + VSTEP < self.scroll:  # skips characters above the viewing window
+            if y + VSTEP < current_scroll:  # skips characters above the viewing window
                 continue
             self.canvas.create_text(
-                x, y - self.scroll, text=c
+                x, y - current_scroll, text=c
             )  # The page coordinate `y` then has screen coordinate `y - self.scroll`
 
     # ---------------------
@@ -364,8 +398,6 @@ class Browser:
             clean_addr = f"{url.scheme}://{url.host}{url.path}"
             self.url_input.insert(0, clean_addr)
 
-        self.scroll = 0  # Force reset top view on newly accessed pages
-
         # to check if the URL is correct or faulty if correct then it will continue
         try:
             body = url.request()
@@ -377,7 +409,8 @@ class Browser:
         self.display_list = layout(text)
         # [-1] to get the last item then [1] to access the y index of the tuple
         # this get the last index of Y
-        self.max_y = int(self.display_list[-1][1] + VSTEP) if self.display_list else 0
+        new_max_y = int(self.display_list[-1][1] + VSTEP) if self.display_list else 0
+        self.scroller.reset(new_max_y)
         self.draw()
 
 
