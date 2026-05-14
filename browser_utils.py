@@ -1,6 +1,7 @@
 import socket
 import ssl
 import tkinter as tk
+import tkinter.font
 
 # chosed because that was a common old-timey monitor size
 WIDTH, HEIGHT = 900, 600
@@ -333,6 +334,7 @@ class Browser:
         # Setup Event Bindings delegating cleanly to the controller
         self._setup_bindings()
 
+    # ---------------
     """WHY did I choose to write a lambda function in the binding section
         If we just use self.scrollUp(True) It will give AttributeError so had to
         write a callable function reference that
@@ -366,6 +368,12 @@ class Browser:
     # page drawing and content rendering
     # ------------------------------------
     def draw(self):
+        """font1 = tkinter.font.Font(family="Times", size=16)
+        font2 = tkinter.font.Font(family="Times", size=16, slant="italic")
+        x, y = 200, 225
+        self.canvas.create_text(x, y, text="Hello, ", font=font1, anchor="nw")
+        x += font1.measure("Hello, ")
+        self.canvas.create_text(x, y, text="overlapping!", font=font2, anchor="nw")"""
         self.canvas.delete("all")  # to clear the old text
         # draw each character based on the stored position
         self.scroller.sync_ui()  # Tells the scrollbar to sync size
@@ -376,8 +384,15 @@ class Browser:
                 continue
             if y + VSTEP < current_scroll:  # skips characters above the viewing window
                 continue
+            """Why anchor='nw'?
+                By default, Tkinter centers text at the given (x, y) coordinate.
+                If we draw consecutive words by advancing x by the measured width (x += width),
+                the next word will center itself on the new x, causing its left half to overlap
+                with the previous word. Setting anchor='nw' (North-West) aligns the top-left corner
+                to (x, y), allowing words to render perfectly side-by-side.
+            """
             self.canvas.create_text(
-                x, y - current_scroll, text=c
+                x, y - current_scroll, text=c, anchor="nw"
             )  # The page coordinate `y` then has screen coordinate `y - self.scroll`
 
     # ---------------------
@@ -415,17 +430,22 @@ class Browser:
 
 
 def layout(text):
-    display_text = []  # will compute and store the position of each character
+    display_text = []  # will compute and store the position of each word
+    font = tkinter.font.Font()
     cursor_x, cursor_y = HSTEP, VSTEP  # the current cursor placement
-    for c in text:
+    for word in text:  # will now draw word by word
+        w = font.measure(word)  # mesuring each word's total width
         display_text.append(
-            (cursor_x, cursor_y, c)
+            (cursor_x, cursor_y, word)
         )  # will store the text's char coordinates in the list based on the variable
 
         # the movement logic
-        cursor_x += HSTEP
-        if cursor_x >= CONTENT_WIDTH - HSTEP:
-            cursor_y += VSTEP  # i.e Vertical steps
+        cursor_x += w + font.measure(" ")  # this adds a space between lines
+        if cursor_x + w >= CONTENT_WIDTH - HSTEP:
+            # linespace is how tall the text
+            # used it to calculate the total needed the vertical shift to start new line
+            # we mutiplied by 1.25 for more to add a gap betwee lines
+            cursor_y += font.metrics("linespace") * 1.25
             cursor_x = HSTEP  # i.e Horizontical steps
     return display_text
 
