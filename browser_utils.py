@@ -75,32 +75,40 @@ class URL:
         #  - how a common encryption key is agreed to
         #  - how to make sure that the browser is connecting to the correct host.
 
-        # we will creae context obj that will wrap the sockent itself
+        # we will create context obj that will wrap the sockent itself
 
         # we use with keyword to auto close both the file and the socket connection
-        with (
-            socket.socket(
-                family=socket.AF_INET,  # Address families have names that begin with `AF`
-                type=socket.SOCK_STREAM,  # Types have names that begin with `SOCK`.
-                proto=socket.IPPROTO_TCP,  # Protocols have names that depend on the address family.
-            ) as s
-        ):
-            # Configure a reasonable timeout so bad links don't freeze the GUI indefinitely
-            s.settimeout(5.0)
-            s.connect((self.host, self.port))
-            if self.scheme == "https":
-                ctx = ssl.create_default_context()
-                s = ctx.wrap_socket(s, server_hostname=self.host)
-            # `connect` takes a single argument
-            # that argument is a pair of a host and a port.
-            # NOTE: different address families have different numbers of arguments.
-
-            # request formating
-            request = f"GET {self.path} HTTP/1.0\r\n"
+        s = socket.socket(
+            family=socket.AF_INET,  # Address families have names that begin with `AF`
+            type=socket.SOCK_STREAM,  # Types have names that begin with `SOCK`.
+            proto=socket.IPPROTO_TCP,  # Protocols have names that depend on the address family.
+        )
+        # Configure a reasonable timeout so bad links don't freeze the GUI indefinitely
+        s.settimeout(5.0)
+        s.connect((self.host, self.port))
+        if self.scheme == "https":
+            ctx = ssl.create_default_context()
+            s = ctx.wrap_socket(s, server_hostname=self.host)
+        # `connect` takes a single argument
+        # that argument is a pair of a host and a port.
+        # NOTE: different address families have different numbers of arguments.
+        """ BUG FOUND:
+            due using the raw socket in with When the with block ends,
+            it will abruptly tear down the underlying TCP socket without
+            cleanly shutting down the TLS connection, which can lead to
+            data truncation or ssl.SSLError exceptions during
+            the response extraction.
+        """
+        with s:
+            # request headers formating
+            request = f"GET {self.path} HTTP/1.1\r\n"
             request += f"Host: {self.host}\r\n"
+            # Naming the browser under User-Agent header NOT HOST no duplicate host
+            request += "User-Agent: pybowser\r\n"
+            request += "Connection: close\r\n"
             request += "\r\n"
 
-            # sending the request
+            # sending the first request
             s.send(request.encode("utf8"))
             # getting the respone and Wrap stream parsing safely
             # makefile is a shortcut for copying the response and pasted it into a temp file
@@ -113,6 +121,7 @@ class URL:
                 # fill in a map of header names to header values.
                 # NOTE:Headers are case-insensitive, so normalize them to lower case
                 response_headers = {}
+                # header parsing
                 while True:
                     line = response.readline()
                     if line == "\r\n":
@@ -136,9 +145,23 @@ class URL:
 
                 # Headers can describe all sorts of information,
                 # couple of headers are especially important because they tell us that the data
-                assert "transfer-encoding" not in response_headers
-                assert "content-encoding" not in response_headers
-                return response.read()
+                """ Deprecated http/1 headers
+                # assert "transfer-encoding" not in response_headers
+                # assert "content-encoding" not in response_headers
+                """
+                # deprected http/1.1 headers
+                if "transfer-encoding" in response_headers:
+                    return "<h1>Error: Chunked Transfer-Encoding is not yet supported by pybowser.</h1>"
+                if "content-encoding" in response_headers:
+                    return "<h1>Error: GZIP/Deflate Content-Encoding is not yet supported by pybowser.</h1>"
+                # 5. Safely Read the Body (HTTP/1.1 standard behavior)
+                if "content-length" in response_headers:
+                    # Read exact bytes to avoid hanging on keep-alive connections
+                    content_length = int(response_headers["content-length"])
+                    return response.read(content_length)
+                else:
+                    # Fallback: Read until connection closes (relies on Connection: close working)
+                    return response.read()
 
 
 class ScrollController:
